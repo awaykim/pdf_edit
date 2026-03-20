@@ -18,7 +18,7 @@
 
 import { execSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync } from "fs";
-import { setOutput } from "@actions/core" assert { "resolution-mode": "import" };
+
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ISSUE_NUMBER   = process.env.ISSUE_NUMBER;
