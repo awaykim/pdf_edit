@@ -71,8 +71,8 @@ jobs:
           git commit -m "fix(ai): auto patch for issue #${{ steps.branch_info.outputs.issue_number }} [skip ci]"
           git push
 
-      # ── 8. PR을 ready for review로 변경 ──────────────────────────
-      - name: Mark PR as ready for review
+      # ── 8. PR을 생성하거나 ready for review로 변경 ──────────────────────────
+      - name: Create or Mark PR as ready for review
         if: steps.tsc_check.outcome == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,13 +82,19 @@ jobs:
             --json number \
             --jq '.[0].number')
 
-          if [ -n "$PR_NUMBER" ]; then
+          if [ -z "$PR_NUMBER" ]; then
+            echo "PR이 없으므로 새로 생성합니다."
+            gh pr create \
+              --title "🚨 [AI-Fix] Fix for Issue #${{ steps.branch_info.outputs.issue_number }}" \
+              --body "🤖 이 PR은 AI 자동 장애 대응 파이프라인에 의해 생성되었습니다.\n\n✅ TypeScript 빌드 통과" \
+              --base main \
+              --head "${{ steps.branch_info.outputs.branch }}"
+            echo "✅ 새 PR 생성 완료"
+          else
             gh pr ready "$PR_NUMBER"
             gh pr comment "$PR_NUMBER" \
               --body "✅ TypeScript 빌드 통과 — AI 패치 적용 완료. 코드 리뷰 후 머지 해주세요."
             echo "✅ PR #$PR_NUMBER → ready for review"
-          else
-            echo "⚠️ PR을 찾지 못했습니다."
           fi
 
       # ── 9. 빌드 실패 시 PR에 코멘트 ─────────────────────────────
