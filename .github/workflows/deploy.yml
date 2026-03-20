@@ -1,0 +1,73 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main, dev]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      KAKAO_REST_API_KEY: ${{ secrets.KAKAO_REST_API_KEY }}
+      KAKAO_REDIRECT_URI: ${{ secrets.KAKAO_REDIRECT_URI }}
+      KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker asia-northeast3-docker.pkg.dev
+
+      - name: Set variables by branch
+        id: vars
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "SERVICE_NAME=kkaeal-group-api" >> $GITHUB_OUTPUT
+            echo "NODE_ENV=production" >> $GITHUB_OUTPUT
+            echo "DOCKERFILE=dockerfile" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref_name }}" == "dev" ]]; then
+            echo "SERVICE_NAME=kkaeal-dev-api" >> $GITHUB_OUTPUT
+            echo "NODE_ENV=development" >> $GITHUB_OUTPUT
+            echo "DOCKERFILE=dockerfile.dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -f ${{ steps.vars.outputs.DOCKERFILE }} \
+            -t asia-northeast3-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/kkaeal-group-ar/${{ steps.vars.outputs.SERVICE_NAME }} .
+
+      - name: Push Docker image to Artifact Registry
+        run: |
+          docker push asia-northeast3-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/kkaeal-group-ar/${{ steps.vars.outputs.SERVICE_NAME }}
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v1
+        with:
+          service: ${{ steps.vars.outputs.SERVICE_NAME }}
+          image: asia-northeast3-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/kkaeal-group-ar/${{ steps.vars.outputs.SERVICE_NAME }}
+          region: asia-northeast3
+          env_vars: |
+            NODE_ENV=${{ steps.vars.outputs.NODE_ENV }}
+            GOOGLE_PROJECT_ID=${{ secrets.GOOGLE_PROJECT_ID }}
+            FIREBASE_CLIENT_EMAIL=${{ secrets.FIREBASE_CLIENT_EMAIL }}
+            FIREBASE_PRIVATE_KEY=${{ secrets.FIREBASE_PRIVATE_KEY }}
+            KAKAO_REST_API_KEY=${{ secrets.KAKAO_REST_API_KEY }}
+            KAKAO_CLIENT_SECRET=${{ secrets.KAKAO_CLIENT_SECRET }}

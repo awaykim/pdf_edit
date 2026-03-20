@@ -1,0 +1,108 @@
+name: 🤖 AI Auto Fix
+
+on:
+  push:
+    branches:
+      - "fix/auto-*"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  ai-fix:
+    name: AI 코드 수정 & PR 준비
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. 체크아웃 ──────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Node.js 설치 ───────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # ── 3. 의존성 설치 ────────────────────────────────────────────
+      - name: Install dependencies
+        run: npm ci
+
+      # ── 4. TypeScript 빌드 검증 ───────────────────────────────────
+      - name: TypeScript build check
+        id: tsc_check
+        run: npm run build
+        continue-on-error: true
+
+      # ── 5. Issue 번호 추출 ────────────────────────────────────────
+      - name: Extract issue number from branch name
+        id: branch_info
+        run: |
+          BRANCH="${GITHUB_REF#refs/heads/}"
+          ISSUE_NUMBER=$(echo "$BRANCH" | grep -oP '(?<=fix/auto-)\d+')
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
+          echo "📌 Branch: $BRANCH  Issue: #$ISSUE_NUMBER"
+
+      # ── 6. Gemini로 수정 제안 생성 ────────────────────────────────
+      - name: Generate AI patch suggestions
+        id: ai_patch
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ISSUE_NUMBER: ${{ steps.branch_info.outputs.issue_number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: node .github/scripts/gen-patch.mjs
+
+      # ── 7. 변경사항이 있으면 커밋 & 푸시 ─────────────────────────
+      - name: Commit and push AI changes
+        if: steps.ai_patch.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(ai): auto patch for issue #${{ steps.branch_info.outputs.issue_number }} [skip ci]"
+          git push
+
+      # ── 8. PR을 ready for review로 변경 ──────────────────────────
+      - name: Mark PR as ready for review
+        if: steps.tsc_check.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=$(gh pr list \
+            --head "${{ steps.branch_info.outputs.branch }}" \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr ready "$PR_NUMBER"
+            gh pr comment "$PR_NUMBER" \
+              --body "✅ TypeScript 빌드 통과 — AI 패치 적용 완료. 코드 리뷰 후 머지 해주세요."
+            echo "✅ PR #$PR_NUMBER → ready for review"
+          else
+            echo "⚠️ PR을 찾지 못했습니다."
+          fi
+
+      # ── 9. 빌드 실패 시 PR에 코멘트 ─────────────────────────────
+      - name: Comment on build failure
+        if: steps.tsc_check.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=$(gh pr list \
+            --head "${{ steps.branch_info.outputs.branch }}" \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" \
+              --body "❌ TypeScript 빌드에 실패했습니다. AI 패치를 수동으로 검토 후 수정해주세요."
+          fi
